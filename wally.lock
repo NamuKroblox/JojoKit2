@@ -10,7 +10,12 @@ dependencies = []
 [[package]]
 name = "general/jojokit"
 version = "0.1.0"
-dependencies = [["knit", "sleitnick/knit@1.7.0"]]
+dependencies = [["chrono", "parihsz/chrono@2.0.11"], ["knit", "sleitnick/knit@1.7.0"]]
+
+[[package]]
+name = "parihsz/chrono"
+version = "2.0.11"
+dependencies = []
 
 [[package]]
 name = "sleitnick/comm"

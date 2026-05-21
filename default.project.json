@@ -12,11 +12,6 @@
       }
     },
 
-    "ServerStorage": {
-      "ServerPackages": {
-        "$path": "ServerPackages"
-      }
-    },
 
     "ServerScriptService": {
       "Server": {

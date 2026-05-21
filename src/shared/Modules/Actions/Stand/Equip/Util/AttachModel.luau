@@ -90,7 +90,7 @@ function AttachModel.Attach(character: Model, template: Model, offset: CFrame?):
 		end
 	end
 
-	clone.Parent = workspace
+	clone.Parent = character
 	clone:PivotTo(root.CFrame)
 
 	local motor = Instance.new("Motor6D")
