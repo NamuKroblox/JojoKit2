@@ -1,10 +1,10 @@
--- ReplicationService (ModuleScript — ServerStorage/Services)
--- Replaces: ValidatedRemoteAction, BroadcastEvent, ReconcileEvent, AckEvent
-
-local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local Knit = require(game:GetService("ReplicatedStorage").Packages.knit)
-
 local Registry = require(game:GetService("ReplicatedStorage").Shared.Modules.Replication.ReplicationRegistry)
+
+local GLOBAL_RATE = 60
+local MAX_SEQ = 1e6
+local MAX_ACTION_LEN = 64
 
 local ReplicationService = {
 	Name = "ReplicationService",
@@ -14,48 +14,49 @@ local ReplicationService = {
 	},
 }
 
-function ReplicationService:KnitInit() end
+local dispatchCount = {} -- keyed by userId
+
+function ReplicationService:KnitInit()
+	RunService.Heartbeat:Connect(function()
+		table.clear(dispatchCount)
+	end)
+end
 
 function ReplicationService.Client:DispatchAction(sender, actionType, payload, clientSeq)
-	local handlers = Registry.get(actionType)
+	if type(actionType) ~= "string" or #actionType == 0 or #actionType > MAX_ACTION_LEN then
+		return
+	end
 
+	if type(clientSeq) ~= "number" or clientSeq <= 0 or clientSeq > MAX_SEQ then
+		return
+	end
+
+	local userId = sender and sender.UserId
+	if not userId then
+		return
+	end
+
+	dispatchCount[userId] = (dispatchCount[userId] or 0) + 1
+	if dispatchCount[userId] > GLOBAL_RATE then
+		warn("[Replication] Rate limit:", sender.Name)
+		return
+	end
+
+	local handlers = Registry.get(actionType)
 	if not handlers then
-		warn(("[Replication] No handlers registered for action '%s'"):format(tostring(actionType)))
+		warn("[Replication] No handler for:", actionType)
 		return
 	end
 
 	local ok, reason = handlers.validate(sender, payload)
-
 	if not ok then
-		warn(
-			("[Replication] Validation failed | Player=%s | Action=%s | Reason=%s"):format(
-				sender.Name,
-				tostring(actionType),
-				tostring(reason)
-			)
-		)
-
-		self.Reconcile:Fire(sender, actionType, reason, clientSeq)
+		self.Reconcile:Fire(sender, actionType, clientSeq, false, nil, reason)
 		return
 	end
 
-	local broadcastState = handlers.predict(sender, payload)
-
-	self.Reconcile:Fire(sender, actionType, nil, clientSeq)
-
-	local all = Players:GetPlayers()
-
-	for i = 1, #all do
-		local other = all[i]
-
-		if other ~= sender then
-			print(
-				("[Replication] Broadcasting '%s' from %s -> %s"):format(tostring(actionType), sender.Name, other.Name)
-			)
-
-			self.Broadcast:Fire(other, sender.UserId, actionType, payload, broadcastState)
-		end
-	end
+	local broadcastState = handlers.Execute(sender, payload)
+	self.Reconcile:Fire(sender, actionType, clientSeq, true, broadcastState, nil)
+	self.Broadcast:FireAll(sender.UserId, actionType, broadcastState)
 end
 
 return ReplicationService

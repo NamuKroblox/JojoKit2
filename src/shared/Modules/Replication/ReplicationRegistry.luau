@@ -1,20 +1,15 @@
--- ReplicationRegistry (ModuleScript — ReplicatedStorage/Shared/Modules/Replication)
-
 local NOOP = function() end
-local NOOP_VALIDATE = function(_, _)
-	return true, nil
-end
+local NOOP_VALIDATE = function() return true, nil end
 
 local registry = {}
-
 local Registry = {}
 
 function Registry.register(actionType, handlers)
-	assert(type(actionType) == "string" and #actionType > 0)
+	assert(type(actionType) == "string" and #actionType > 0 and #actionType <= 64)
 	registry[actionType] = {
-		validate = handlers.validate or NOOP_VALIDATE,
-		predict = handlers.predict or NOOP,
-		onPredict = handlers.onPredict or NOOP,
+		validate    = handlers.validate    or NOOP_VALIDATE,
+		Execute     = handlers.Execute     or NOOP,
+		onPredict   = handlers.onPredict   or NOOP,
 		onReconcile = handlers.onReconcile or NOOP,
 		onBroadcast = handlers.onBroadcast or NOOP,
 	}

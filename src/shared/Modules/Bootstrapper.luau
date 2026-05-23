@@ -38,8 +38,8 @@ function Bootstrapper.start(config: {
 	actions: { Instance }?,
 	services: { Instance }?,
 	controllers: { Instance }?,
-
 	knit: any,
+	chrono: any,
 })
 	if config.actions then
 		for _, dir in config.actions do
@@ -64,6 +64,7 @@ function Bootstrapper.start(config: {
 	end
 
 	config.knit.Start():catch(warn)
+	config.chrono.Start()
 end
 
 return Bootstrapper

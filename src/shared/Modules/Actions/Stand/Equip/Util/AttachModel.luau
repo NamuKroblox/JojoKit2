@@ -8,6 +8,7 @@ local WELD_NAME = "AttachModelWeld"
 type Record = {
 	character: Model,
 	clone: Model,
+	connections: { RBXScriptConnection }?,
 }
 
 type Entry = {
@@ -15,36 +16,60 @@ type Entry = {
 	boundCharacter: Model?,
 }
 
-local registry: { [Player]: Entry } = {}
+-- key by userId to avoid storing Player objects as keys
+local registry: { [number]: Entry } = {}
 
 local function destroyRecord(record: Record)
+	if record.connections then
+		for _, c in pairs(record.connections) do
+			if c then
+				c:Disconnect()
+			end
+		end
+		record.connections = nil
+	end
+
 	if record.clone and record.clone.Parent then
+		-- clean up Motor6D if created
+		local root = record.character and record.character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local weld = root:FindFirstChild(WELD_NAME)
+			if weld then
+				weld:Destroy()
+			end
+		end
 		record.clone:Destroy()
 	end
 end
 
-local function bindCharacter(player: Player, character: Model)
-	local entry = registry[player]
+local function bindCharacter(userId: number, playerCharacter: Model)
+	local entry = registry[userId]
 	if not entry then
 		return
 	end
-	if entry.boundCharacter == character then
+	if entry.boundCharacter == playerCharacter then
 		return
 	end
-	entry.boundCharacter = character
+	entry.boundCharacter = playerCharacter
 
-	character.AncestryChanged:Connect(function(_, parent)
+	local conn = playerCharacter.AncestryChanged:Connect(function(_, parent)
 		if parent then
 			return
 		end
-		AttachModel.Detach(player)
+		AttachModel.DetachByUserId(userId)
 	end)
 
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	table.insert(entry.records, { character = playerCharacter, clone = nil, connections = { conn } })
+
+	local humanoid = playerCharacter:FindFirstChildOfClass("Humanoid")
 	if humanoid then
-		humanoid.Died:Once(function()
-			AttachModel.Detach(player)
-		end)
+		table.insert(entry.records, {
+			character = playerCharacter,
+			clone = nil,
+			connections = { humanoid.Died:Connect(function()
+				AttachModel.DetachByUserId(userId)
+			end) },
+		})
 	end
 end
 
@@ -56,11 +81,12 @@ function AttachModel.Attach(character: Model, template: Model, offset: CFrame?):
 		return nil
 	end
 
-	if not registry[player] then
-		registry[player] = { records = {} }
+	local userId = player.UserId
+	if not registry[userId] then
+		registry[userId] = { records = {} }
 	end
 
-	bindCharacter(player, character)
+	bindCharacter(userId, character)
 
 	local clone = template:Clone()
 	local cloneRoot = clone.PrimaryPart
@@ -93,36 +119,63 @@ function AttachModel.Attach(character: Model, template: Model, offset: CFrame?):
 	clone.Parent = character
 	clone:PivotTo(root.CFrame)
 
+	task.spawn(function()
+		local success, VFX = pcall(function()
+			return game.ReplicatedStorage.Vfx.Stand.Summon:FindFirstChild(clone.Name).Main
+		end)
+		if not success or not VFX then
+			return
+		end
+		local NEW_VFX = VFX:Clone()
+		NEW_VFX.Parent = cloneRoot
+
+		for _, emitter in NEW_VFX:GetDescendants() do
+			if emitter:IsA("ParticleEmitter") then
+				emitter.Enabled = true
+				emitter:Emit(emitter:GetAttribute("EmitCount") or 1)
+			end
+		end
+
+		task.delay(1, function()
+			if NEW_VFX and NEW_VFX.Parent then
+				NEW_VFX:Destroy()
+			end
+		end)
+	end)
+
 	local motor = Instance.new("Motor6D")
 	motor.Name = WELD_NAME
 	motor.Part0 = root
 	motor.Part1 = cloneRoot
-
 	motor.C0 = offset
-
 	motor.Parent = root
 
-	table.insert(registry[player].records, {
-		character = character,
-		clone = clone,
-	})
+	local record = { character = character, clone = clone, connections = {} }
+	table.insert(registry[userId].records, record)
 
 	return clone
 end
 
-function AttachModel.Detach(player: Player)
-	local entry = registry[player]
+function AttachModel.DetachByUserId(userId: number)
+	local entry = registry[userId]
 	if not entry then
 		return
 	end
 	for _, record in entry.records do
 		destroyRecord(record)
 	end
-	registry[player] = nil
+	registry[userId] = nil
+end
+
+function AttachModel.Detach(player: Player)
+	if not player then
+		return
+	end
+	AttachModel.DetachByUserId(player.UserId)
 end
 
 function AttachModel.HasAttachment(player: Player): boolean
-	local entry = registry[player]
+	local entry = registry[player.UserId]
 	if not entry then
 		return false
 	end
@@ -135,7 +188,7 @@ function AttachModel.HasAttachment(player: Player): boolean
 end
 
 function AttachModel.GetRecords(player: Player): { Record }?
-	local entry = registry[player]
+	local entry = registry[player.UserId]
 	return entry and entry.records or nil
 end
 

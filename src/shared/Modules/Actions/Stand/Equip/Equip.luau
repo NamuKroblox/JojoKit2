@@ -1,72 +1,77 @@
-local Players = game:GetService("Players")
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
+local RunService        = game:GetService("RunService")
 
-local Registry = require(ReplicatedStorage.Shared.Modules.Replication.ReplicationRegistry)
-local State = require(ReplicatedStorage.Shared.Modules.State.State)
-local Meta = require(ReplicatedStorage.Shared.Modules.State.Meta)
-local Constants = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
+local Registry       = require(ReplicatedStorage.Shared.Modules.Replication.ReplicationRegistry)
+local ActionTemplate = require(ReplicatedStorage.Shared.Modules.Replication.ActionTemplate)
+local State          = require(ReplicatedStorage.Shared.Modules.State.State)
+local Meta           = require(ReplicatedStorage.Shared.Modules.State.Meta)
+local Constants      = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
 
 local IS_SERVER = RunService:IsServer()
 
-local TOGGLE_DEBOUNCE = 0.3
-local lastToggleTime = 0
-
 if IS_SERVER then
+	local t                 = ActionTemplate.server({ cooldown = 0.5 })
 	local StandEquipManager = require(game:GetService("ServerScriptService").Server.Modules.Stand.Equip.Manager)
+	
+	Players.PlayerAdded:Connect(function(player)
+		StandEquipManager.Init(player)
+
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		t:cleanup(player)
+	end)
 
 	Registry.register(Constants.ACTION, {
-
-		validate = function(player, _payload)
-			if not State.get(Meta.StateKeys.CharacterAlive, player) then
-				return false, StandEquipManager.IsEquipped(player)
-			end
-			return true, nil
+		validate = function(player)
+			return t:validate(player, function(p)
+				if not State.get(Meta.StateKeys.CharacterAlive, p) then
+					return false, "dead"
+				end
+				return true, nil
+			end)
 		end,
 
-		predict = function(player, _payload)
-			local fn = StandEquipManager.Toggle(player)
-			if fn then
-				return true
-			else
-				return false
-			end
+		Execute = function(player)
+			t:advance(player)
+			local equipped = StandEquipManager.Toggle(player)
+			return { equipped = equipped, _count = 1 }
 		end,
 	})
+
 else
-	local StandVisual = require(script.Parent.Util.StandVisual)
-	local localPlayer = Players.LocalPlayer
-	local pendingToggle: boolean? = nil
+	local t            = ActionTemplate.client({ cooldown = 0.5 })
+	local StandVisual  = require(script.Parent.Util.StandVisual)
+	local localPlayer  = Players.LocalPlayer
 
 	Registry.register(Constants.ACTION, {
-
-		onPredict = function(_payload)
+		onPredict = function()
 			local now = os.clock()
-			if (now - lastToggleTime) < TOGGLE_DEBOUNCE then
-				return false
-			end
-			lastToggleTime = now
-
+			local ok  = t:canAct(now)
+			if not ok then return false end
+			t:advance(now)
 			local next = not (State.get(Meta.StateKeys.StandEquipped, localPlayer) == true)
-			pendingToggle = next
 			State.set(Meta.StateKeys.StandEquipped, localPlayer, next)
 			return true
 		end,
 
-		onReconcile = function(reconcileState)
-			pendingToggle = nil
-			if reconcileState ~= nil then
-				State.set(Meta.StateKeys.StandEquipped, localPlayer, reconcileState)
-			end
+		onReconcile = function(state, reason, clientSeq)
+			t:reconcile(clientSeq, state,
+				function(s)
+					State.set(Meta.StateKeys.StandEquipped, localPlayer, s.equipped)
+				end,
+				function()
+					State.set(Meta.StateKeys.StandEquipped, localPlayer, false)
+				end
+			)
 		end,
 
-		onBroadcast = function(senderUserId, _payload, authoritativeState)
+		onBroadcast = function(senderUserId, state)
 			local sender = Players:GetPlayerByUserId(senderUserId)
-			if not sender then
-				return
-			end
-			State.set(Meta.StateKeys.StandEquipped, sender, authoritativeState)
-			StandVisual.sync(sender, authoritativeState)
+			if not sender then return end
+			State.set(Meta.StateKeys.StandEquipped, sender, state.equipped)
+			StandVisual.sync(sender, state.equipped)
 		end,
 	})
 

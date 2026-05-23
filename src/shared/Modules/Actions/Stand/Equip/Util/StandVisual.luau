@@ -2,6 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local AttachModel = require(script.Parent.AttachModel)
 local Constants = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
+local AnimationController = require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationController)
 
 local STAND_MODELS = ReplicatedStorage.StandModels
 local ATTACH_OFFSET = CFrame.new(2, 1.5, 2.5)
@@ -39,12 +40,24 @@ local function show(player: Player, character: Model)
 			return
 		end
 
-		AttachModel.Attach(character, template, ATTACH_OFFSET)
+		local Model = AttachModel.Attach(character, template, ATTACH_OFFSET)
+
+		local profile =
+			require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationRegistry).NPCs[Constants.DEFAULT_STAND]
+
+		local anim = AnimationController.Attach(Model, Model.Humanoid.Animator, profile)
+
+		anim:Play("Idle", {
+			blend = 0.2,
+			speed = 1,
+		})
 	end)
 end
 
 local function hide(player: Player)
 	nextToken(player)
+
+	AnimationController.Destroy(player)
 	AttachModel.Detach(player)
 end
 
@@ -69,6 +82,7 @@ end
 
 function StandVisual.cleanup(player: Player)
 	attachTokens[player] = nil
+
 	AttachModel.Detach(player)
 end
 
