@@ -41,12 +41,6 @@ function Bootstrapper.start(config: {
 	knit: any,
 	chrono: any,
 })
-	if config.actions then
-		for _, dir in config.actions do
-			scanActions(dir)
-		end
-	end
-
 	if config.services then
 		for _, dir in config.services do
 			scanKnit(dir, "Service", function(result)
@@ -65,6 +59,12 @@ function Bootstrapper.start(config: {
 
 	config.knit.Start():catch(warn)
 	config.chrono.Start()
+
+	if config.actions then
+		for _, dir in config.actions do
+			scanActions(dir)
+		end
+	end
 end
 
 return Bootstrapper

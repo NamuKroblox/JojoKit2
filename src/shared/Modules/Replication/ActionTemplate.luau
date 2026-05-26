@@ -1,4 +1,5 @@
 local RunService = game:GetService("RunService")
+
 local IS_SERVER = RunService:IsServer()
 
 local ServerTemplate = {}
@@ -6,23 +7,28 @@ ServerTemplate.__index = ServerTemplate
 
 function ServerTemplate.new(config: {
 	cooldown: number?,
-	resetAfter: number?,
-	maxCount: number?,
 })
+	config = config or {}
+
 	return setmetatable({
 		_cooldown = config.cooldown or 0,
-		_resetAfter = config.resetAfter or math.huge,
-		_maxCount = config.maxCount or math.huge,
 		_data = {},
 	}, ServerTemplate)
 end
 
 function ServerTemplate:_get(player)
 	local d = self._data[player]
+
 	if not d then
-		d = { lastTime = 0, count = 0, locks = {} }
+		d = {
+			lastTime = 0,
+			locks = {},
+			lastSeq = 0,
+		}
+
 		self._data[player] = d
 	end
+
 	return d
 end
 
@@ -30,48 +36,64 @@ function ServerTemplate:cleanup(player)
 	self._data[player] = nil
 end
 
-function ServerTemplate:validate(player, extra)
-	local now = os.clock()
+function ServerTemplate:_pruneLocks(d, now)
+	for key, expiry in pairs(d.locks) do
+		if now >= expiry then
+			d.locks[key] = nil
+		end
+	end
+end
+
+function ServerTemplate:validate(player, clientSeq: number, extra)
+	if type(clientSeq) ~= "number" then
+		return false, "bad_seq"
+	end
+
+	local now = workspace:GetServerTimeNow()
 	local d = self:_get(player)
+
+	self:_pruneLocks(d, now)
+
+	if clientSeq <= d.lastSeq then
+		return false, "stale_seq"
+	end
 
 	if (now - d.lastTime) < self._cooldown then
 		return false, "cooldown"
 	end
 
-	for key, expiry in d.locks do
+	for key, expiry in pairs(d.locks) do
 		if now < expiry then
 			return false, "locked:" .. key
 		end
-		d.locks[key] = nil
 	end
 
 	if extra then
-		return extra(player, d, now)
+		local ok, reason = extra(player, d, now)
+		if not ok then
+			return false, reason
+		end
 	end
 
 	return true, nil
 end
 
-function ServerTemplate:advance(player)
-	local now = os.clock()
+function ServerTemplate:advance(player, clientSeq: number)
+	local now = workspace:GetServerTimeNow()
 	local d = self:_get(player)
 
-	if (now - d.lastTime) > self._resetAfter then
-		d.count = 0
-	end
-
-	d.count = (d.count % self._maxCount) + 1
 	d.lastTime = now
+	d.lastSeq = clientSeq
 
-	return d.count, now
+	return now
 end
 
 function ServerTemplate:lock(player, key, duration)
-	self:_get(player).locks[key] = os.clock() + duration
+	self:_get(player).locks[key] = workspace:GetServerTimeNow() + duration
 end
 
-function ServerTemplate:getCount(player)
-	return self:_get(player).count
+function ServerTemplate:getLastSeq(player)
+	return self:_get(player).lastSeq
 end
 
 local ClientTemplate = {}
@@ -79,84 +101,98 @@ ClientTemplate.__index = ClientTemplate
 
 function ClientTemplate.new(config: {
 	cooldown: number?,
-	resetAfter: number?,
-	maxCount: number?,
 })
+	config = config or {}
+
 	return setmetatable({
 		_cooldown = config.cooldown or 0,
-		_resetAfter = config.resetAfter or math.huge,
-		_maxCount = config.maxCount or math.huge,
+
 		_seq = 0,
 		_reconciledSeq = 0,
+
 		_lastTime = 0,
-		_count = 0,
 		_locks = {},
 	}, ClientTemplate)
+end
+
+function ClientTemplate:cleanup()
+	self._seq = 0
+	self._reconciledSeq = 0
+	self._lastTime = 0
+	table.clear(self._locks)
+end
+
+function ClientTemplate:_pruneLocks(now)
+	for key, expiry in pairs(self._locks) do
+		if now >= expiry then
+			self._locks[key] = nil
+		end
+	end
 end
 
 function ClientTemplate:canAct(now)
 	if (now - self._lastTime) < self._cooldown then
 		return false, "cooldown"
 	end
-	for key, expiry in self._locks do
+
+	self:_pruneLocks(now)
+
+	for key, expiry in pairs(self._locks) do
 		if now < expiry then
 			return false, "locked:" .. key
 		end
-		self._locks[key] = nil
 	end
-	return true, nil
+
+	return true
 end
 
 function ClientTemplate:advance(now)
-	if (now - self._lastTime) > self._resetAfter then
-		self._count = 0
-	end
-
-	self._count = (self._count % self._maxCount) + 1
 	self._lastTime = now
 	self._seq += 1
 
-	return self._count, self._seq
+	return self._seq
 end
 
 function ClientTemplate:reconcile(clientSeq, state, onSuccess, onReject)
+	if type(clientSeq) ~= "number" then
+		return
+	end
+
 	if clientSeq <= self._reconciledSeq then
 		return
 	end
+
 	self._reconciledSeq = clientSeq
 
 	if not state then
-		self._count = 0
-		self._lastTime = 0
-		table.clear(self._locks)
+		self:cleanup()
+
 		if onReject then
-			onReject()
+			onReject(clientSeq)
 		end
+
 		return
 	end
 
-	for key, ttl in state._locks or {} do
-		self._locks[key] = os.clock() + ttl
+	for key, expiry in pairs(state._locks or {}) do
+		self._locks[key] = expiry
 	end
 
-	local mispredicted = self._count ~= state._count
-	self._count = state._count
-
 	if onSuccess then
-		onSuccess(state, mispredicted)
+		onSuccess(state, clientSeq)
 	end
 end
 
 function ClientTemplate:lock(key, duration)
-	self._locks[key] = os.clock() + duration
-end
-
-function ClientTemplate:getCount()
-	return self._count
+	self._locks[key] = workspace:GetServerTimeNow() + duration
 end
 
 function ClientTemplate:getSeq()
 	return self._seq
+end
+
+function ClientTemplate:getReconciledSeq()
+	return self._reconciledSeq
 end
 
 local ActionTemplate = {}

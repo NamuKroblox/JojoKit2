@@ -83,12 +83,7 @@ local function safeCleanup(fns: { () -> () }): () -> ()
 	end
 end
 
-local function register(
-	registry: { [string]: { RegistryEntry } },
-	input: InputToken,
-	action: string,
-	fn: () -> ()
-)
+local function register(registry: { [string]: { RegistryEntry } }, input: InputToken, action: string, fn: () -> ())
 	local id = getInputId(input)
 
 	registry[id] = registry[id] or {}
@@ -99,11 +94,7 @@ local function register(
 	})
 end
 
-local function unregister(
-	registry: { [string]: { RegistryEntry } },
-	input: InputToken,
-	action: string
-)
+local function unregister(registry: { [string]: { RegistryEntry } }, input: InputToken, action: string)
 	local id = getInputId(input)
 
 	local list = registry[id]
@@ -195,12 +186,7 @@ local endedConn = UIS.InputEnded:Connect(function(input)
 	end
 end)
 
-function InputBind.input(
-	action: string,
-	input: InputToken,
-	handler: () -> (),
-	scope: Scope?
-): () -> ()
+function InputBind.input(action: string, input: InputToken, handler: () -> (), scope: Scope?): () -> ()
 	return bindWithScope(scope or "permanent", function()
 		register(downRegistry, input, action, handler)
 
@@ -210,10 +196,7 @@ function InputBind.input(
 	end)
 end
 
-function InputBind.inputs(
-	bindings: { [string]: BindingEntry },
-	scope: Scope?
-): () -> ()
+function InputBind.inputs(bindings: { [string]: BindingEntry }, scope: Scope?): () -> ()
 	return bindWithScope(scope or "permanent", function()
 		local cleanups = {}
 
@@ -229,13 +212,7 @@ function InputBind.inputs(
 	end)
 end
 
-function InputBind.held(
-	action: string,
-	input: InputToken,
-	onDown: () -> (),
-	onUp: () -> (),
-	scope: Scope?
-): () -> ()
+function InputBind.held(action: string, input: InputToken, onDown: () -> (), onUp: () -> (), scope: Scope?): () -> ()
 	return bindWithScope(scope or "permanent", function()
 		register(downRegistry, input, action, function()
 			heldActive[action] = true

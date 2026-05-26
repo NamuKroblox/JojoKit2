@@ -1,11 +1,12 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
+local Players = game:GetService("Players")
 local AttachModel = require(script.Parent.AttachModel)
-local Constants = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
-local AnimationController = require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationController)
 
-local STAND_MODELS = ReplicatedStorage.StandModels
-local ATTACH_OFFSET = CFrame.new(2, 1.5, 2.5)
+local Knit = require(game.ReplicatedStorage.Packages.knit)
+local AnimationController
+local Constants = require(game.ReplicatedStorage.Shared.Features.StandEquip.Constants)
+
+local STAND_MODELS = game.ReplicatedStorage.StandModels
+local ATTACH_OFFSET = CFrame.new(-2, 1.5, 2)
 local HRP_TIMEOUT = 10
 
 local StandVisual = {}
@@ -29,7 +30,6 @@ local function show(player: Player, character: Model)
 	task.spawn(function()
 		local hrp = character:FindFirstChild("HumanoidRootPart")
 			or character:WaitForChild("HumanoidRootPart", HRP_TIMEOUT)
-
 		if not hrp then
 			return
 		end
@@ -40,24 +40,36 @@ local function show(player: Player, character: Model)
 			return
 		end
 
-		local Model = AttachModel.Attach(character, template, ATTACH_OFFSET)
+		local clone = AttachModel.Attach(character, template, ATTACH_OFFSET)
+		if not clone then
+			return
+		end
 
-		local profile =
-			require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationRegistry).NPCs[Constants.DEFAULT_STAND]
-
-		local anim = AnimationController.Attach(Model, Model.Humanoid.Animator, profile)
-
-		anim:Play("Idle", {
-			blend = 0.2,
-			speed = 1,
-		})
+		AnimationController = Knit.GetController("AnimationController")
+		local controller = AnimationController.getByUserId(player.UserId)
+		if controller then
+			controller:attach("stand", clone, "Stands." .. template.Name)
+		end
 	end)
 end
 
 local function hide(player: Player)
 	nextToken(player)
 
-	AnimationController.Destroy(player)
+	if not AnimationController then
+		AnimationController = Knit.GetController("AnimationController")
+	end
+
+	local controller = AnimationController.getByUserId(player.UserId)
+	if controller then
+		controller:stopAnimations("standIdle")
+		controller:detach("stand")
+	end
+
+	local attached = AttachModel.HasAttachment(player)
+	if not attached then
+		return
+	end
 	AttachModel.Detach(player)
 end
 
@@ -82,7 +94,10 @@ end
 
 function StandVisual.cleanup(player: Player)
 	attachTokens[player] = nil
-
+	local controller = AnimationController.getByUserId(player.UserId)
+	if controller then
+		controller:detach("stand")
+	end
 	AttachModel.Detach(player)
 end
 

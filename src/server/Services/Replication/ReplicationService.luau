@@ -22,41 +22,48 @@ function ReplicationService:KnitInit()
 	end)
 end
 
-function ReplicationService.Client:DispatchAction(sender, actionType, payload, clientSeq)
+function ReplicationService.Client:DispatchAction(
+	sender: Player,
+	actionType: string,
+	payload: any,
+	clientSeq: number
+): boolean?
 	if type(actionType) ~= "string" or #actionType == 0 or #actionType > MAX_ACTION_LEN then
-		return
+		return false
 	end
 
 	if type(clientSeq) ~= "number" or clientSeq <= 0 or clientSeq > MAX_SEQ then
-		return
+		return false
 	end
 
 	local userId = sender and sender.UserId
 	if not userId then
-		return
+		return false
 	end
 
 	dispatchCount[userId] = (dispatchCount[userId] or 0) + 1
 	if dispatchCount[userId] > GLOBAL_RATE then
 		warn("[Replication] Rate limit:", sender.Name)
-		return
+		return false
 	end
 
 	local handlers = Registry.get(actionType)
 	if not handlers then
 		warn("[Replication] No handler for:", actionType)
-		return
+		return false
 	end
 
-	local ok, reason = handlers.validate(sender, payload)
+	local ok, reason = handlers.validate(sender, payload, clientSeq)
 	if not ok then
 		self.Reconcile:Fire(sender, actionType, clientSeq, false, nil, reason)
-		return
+		return false
 	end
 
-	local broadcastState = handlers.Execute(sender, payload)
+	local broadcastState = handlers.Execute(sender, payload, clientSeq)
 	self.Reconcile:Fire(sender, actionType, clientSeq, true, broadcastState, nil)
 	self.Broadcast:FireAll(sender.UserId, actionType, broadcastState)
+
+	return true
 end
 
 return ReplicationService

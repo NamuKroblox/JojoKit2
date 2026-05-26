@@ -4,7 +4,16 @@ export type Def = {
 	validator: ((any) -> boolean)?,
 }
 
-export type Key = "InGame" | "CharacterAlive" | "StandEquipped" | "Stunned" | "Punching" | "Combo" | "LastPunch"
+export type Key =
+	"InGame"
+	| "CharacterAlive"
+	| "StandEquipped"
+	| "Stunned"
+	| "Punching"
+	| "Combo"
+	| "LastPunch"
+	| "AttackId"
+	| "Sprinting"
 
 local StateKeys = {
 	InGame = "InGame",
@@ -14,6 +23,8 @@ local StateKeys = {
 	Punching = "Punching",
 	Combo = "Combo",
 	LastPunch = "LastPunch",
+	AttackId = "AttackId",
+	Sprinting = "Sprinting",
 }
 
 local StateDefs: { [Key]: Def } = {
@@ -50,6 +61,16 @@ local StateDefs: { [Key]: Def } = {
 	[StateKeys.LastPunch] = {
 		default = 0,
 		type = "number",
+	},
+
+	[StateKeys.AttackId] = {
+		default = 0,
+		type = "number",
+	},
+
+	[StateKeys.Sprinting] = {
+		default = false,
+		type = "boolean",
 	},
 }
 

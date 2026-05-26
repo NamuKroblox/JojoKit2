@@ -7,7 +7,7 @@ local PENDING_TIMEOUT = 5
 
 local ReplicationController = { Name = "ReplicationController" }
 
-local _service = nil
+local ReplicationService
 local seq = 0
 local pendingAcks = {}
 
@@ -17,11 +17,11 @@ local function nextSeq()
 end
 
 function ReplicationController:KnitInit()
-	_service = Knit.GetService("ReplicationService")
+	ReplicationService = Knit.GetService("ReplicationService")
 end
 
 function ReplicationController:KnitStart()
-	_service.Reconcile:Connect(function(actionType, clientSeq, success, reconcileState, reason)
+	ReplicationService.Reconcile:Connect(function(actionType, clientSeq, success, reconcileState, reason)
 		pendingAcks[clientSeq] = nil
 		local handlers = Registry.get(actionType)
 		if not handlers then
@@ -34,7 +34,7 @@ function ReplicationController:KnitStart()
 		end
 	end)
 
-	_service.Broadcast:Connect(function(senderUserId, actionType, broadcastState)
+	ReplicationService.Broadcast:Connect(function(senderUserId, actionType, broadcastState)
 		if senderUserId == Players.LocalPlayer.UserId then
 			return
 		end
@@ -60,24 +60,24 @@ function ReplicationController:KnitStart()
 	end)
 end
 
-function ReplicationController:Dispatch(actionType, payload)
+function ReplicationController:Dispatch(actionType: string, payload: any): boolean
 	local handlers = Registry.get(actionType)
 	if not handlers then
 		warn("[Replication] No handler for:", actionType)
 		return false
 	end
-
-	warn("[REPLICATION] DISPATCHED")
 	local s = nextSeq()
-
 	local success = handlers.onPredict(payload, s)
 	if not success then
 		return false
 	end
-
 	pendingAcks[s] = { action = actionType, sentAt = os.clock() }
-	_service:DispatchAction(actionType, payload, s)
+	ReplicationService:DispatchAction(actionType, payload, s)
 	return true
+end
+
+function ReplicationController:Call(actionType: string, fnName: string, ...: any): ...any
+	return Registry.call(actionType, fnName, ...)
 end
 
 return ReplicationController
