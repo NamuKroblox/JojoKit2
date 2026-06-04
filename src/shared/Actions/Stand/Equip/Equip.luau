@@ -2,17 +2,20 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local Registry = require(ReplicatedStorage.Shared.Modules.Replication.ReplicationRegistry)
-local ActionTemplate = require(ReplicatedStorage.Shared.Modules.Replication.ActionTemplate)
-local State = require(ReplicatedStorage.Shared.Modules.State.State)
-local Meta = require(ReplicatedStorage.Shared.Modules.State.Meta)
-local Constants = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
+local Registry = require(ReplicatedStorage.Shared.Registries.ReplicationRegistry)
+local ActionTemplate = require(ReplicatedStorage.Shared.Replication.ActionTemplate)
+local State = require(ReplicatedStorage.Shared.State.State)
+local Meta = require(ReplicatedStorage.Shared.State.Meta)
+local Constants = {
+	ACTION = "StandEquip",
+}
 
 local IS_SERVER = RunService:IsServer()
-local Cooldown = 0.5
+local COOLDOWN = 0.5
 
 if IS_SERVER then
-	local t = ActionTemplate.server({ cooldown = Cooldown })
+	local Knit = require(ReplicatedStorage.Packages.knit)
+	local t = ActionTemplate.server({ cooldown = COOLDOWN })
 	local StandEquipManager = require(game:GetService("ServerScriptService").Server.Modules.Stand.Equip.Manager)
 
 	Players.PlayerAdded:Connect(function(player)
@@ -20,11 +23,18 @@ if IS_SERVER then
 	end)
 
 	Registry.register(Constants.ACTION, {
+
 		validate = function(player, payload, clientSeq)
-			return t:validate(player, clientSeq, function(player)
+			return t:validate(player, clientSeq, function()
 				if not State.get(Meta.StateKeys.CharacterAlive, player) then
 					return false, "dead"
 				end
+
+				--local StatusService = Knit.GetService("StatusService")
+				--if StatusService:IsBlocked(player, Constants.ACTION) then
+				--	return false, "blocked"
+				--end
+
 				return true, nil
 			end)
 		end,
@@ -49,12 +59,14 @@ if IS_SERVER then
 		end
 	end)
 else
-	local t = ActionTemplate.client({ cooldown = Cooldown })
+	local Knit = require(ReplicatedStorage.Packages.knit)
+	local t = ActionTemplate.client({ cooldown = COOLDOWN })
 	local StandVisual = require(script.Parent.Util.StandVisual)
 	local AttachModel = require(script.Parent.Util.AttachModel)
 	local localPlayer = Players.LocalPlayer
 
 	Registry.register(Constants.ACTION, {
+
 		onPredict = function()
 			local now = os.clock()
 			if not t:canAct(now) then
@@ -84,10 +96,7 @@ else
 
 		public = {
 			RetrieveStandInfo = function(player: Player)
-				local IsStand, Model = AttachModel.HasAttachment(player)
-				warn(IsStand)
-				warn(Model)
-				return IsStand, Model
+				return AttachModel.HasAttachment(player)
 			end,
 		},
 	})

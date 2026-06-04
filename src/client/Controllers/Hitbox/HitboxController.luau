@@ -1,17 +1,14 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-
 local Knit = require(ReplicatedStorage.Packages.knit)
-local Hitbox = require(ReplicatedStorage.Shared.Modules.Helper.Hitbox)
+local Hitbox = require(ReplicatedStorage:WaitForChild("Libraries").Hitbox)
 
-local HitboxController = { Name = "HitboxController" }
-
+local localPlayer = Players.LocalPlayer
 local _hitboxService = nil
 local _replicationController = nil
-local localPlayer = Players.LocalPlayer
+local activeHitboxes = {}
 
-local currentHitbox = nil
-local fired = false
+local HitboxController = { Name = "HitboxController" }
 
 function HitboxController:KnitInit()
 	_hitboxService = Knit.GetService("HitboxService")
@@ -21,31 +18,37 @@ function HitboxController:KnitStart()
 	_replicationController = Knit.GetController("ReplicationController")
 
 	localPlayer.CharacterRemoving:Connect(function()
-		self:Destroy()
+		self:DestroyAll()
 	end)
 end
 
 function HitboxController:Create(config: {
+	userId: number,
 	size: Vector3,
 	cframe: CFrame,
 	offset: CFrame?,
 	lifetime: number?,
-	onLocalHit: ((Model, Humanoid) -> ())?,
+	Combo: number?,
+	overlapParams: OverlapParams?,
+	Data: { StandName: string? }?,
 })
-	self:Destroy()
-
+	local hitId = tostring(config.userId) .. "_" .. tostring(os.clock())
+	local fired = false
 	local finalCFrame = config.offset and (config.cframe * config.offset) or config.cframe
-
-	fired = false
 
 	_hitboxService:Register(finalCFrame, config.size)
 
 	local hb = Hitbox.CreateHitbox()
-	currentHitbox = hb
+	activeHitboxes[hitId] = { hb = hb, registered = true, userId = config.userId }
 
 	hb.Size = config.size
 	hb.CFrame = finalCFrame
 	hb.DetectionMode = "Default"
+	hb.Visualizer = false
+
+	if config.overlapParams then
+		hb.OverlapParams = config.overlapParams
+	end
 
 	hb.Touched:Connect(function(_, humanoid: Humanoid)
 		if fired then
@@ -53,7 +56,7 @@ function HitboxController:Create(config: {
 		end
 
 		local character = humanoid and humanoid.Parent :: Model?
-		if not character or character == localPlayer.Character then
+		if not character or character == localPlayer.Character or character:GetAttribute("IgnoreHits") == true then
 			return
 		end
 		if not humanoid or humanoid.Health <= 0 then
@@ -69,31 +72,46 @@ function HitboxController:Create(config: {
 		_replicationController:Dispatch("Hit", {
 			targetKey = targetKey,
 			isPlayer = isPlayer,
+			TargetCharacter = character,
+			Humanoid = humanoid,
+			Combo = config.Combo,
+			StandName = config.Data and config.Data.StandName,
 		})
-
-		if config.onLocalHit then
-			config.onLocalHit(character, humanoid)
-		end
 	end)
 
 	hb:Start()
 
 	task.delay(config.lifetime or 0.5, function()
-		self:Destroy()
+		self:_destroyById(hitId)
 	end)
 
-	return true
+	return hitId
 end
 
-function HitboxController:Destroy()
-	if currentHitbox then
-		currentHitbox:Stop()
-
-		currentHitbox = nil
+function HitboxController:_destroyById(hitId: string)
+	local entry = activeHitboxes[hitId]
+	if not entry then
+		return
 	end
 
-	_hitboxService:Unregister()
-	fired = false
+	entry.hb:Stop()
+
+	if entry.registered then
+		_hitboxService:Unregister(entry.userId)
+		entry.registered = false
+	end
+
+	activeHitboxes[hitId] = nil
+end
+
+function HitboxController:DestroyAll()
+	local ids = {}
+	for id in activeHitboxes do
+		table.insert(ids, id)
+	end
+	for _, id in ids do
+		self:_destroyById(id)
+	end
 end
 
 return HitboxController

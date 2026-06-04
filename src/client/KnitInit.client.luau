@@ -3,12 +3,12 @@
 local Knit = require(game.ReplicatedStorage.Packages.knit)
 local Chrono = require(game.ReplicatedStorage.Packages.chrono)
 
-local Bootstrapper = require(game.ReplicatedStorage.Shared.Modules.Bootstrapper)
+local Bootstrapper = require(game.ReplicatedStorage.Shared.Bootstrapper)
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 Bootstrapper.start({
 	knit = Knit,
 	chrono = Chrono,
-	actions = { ReplicatedStorage.Shared.Modules.Actions },
+	actions = { ReplicatedStorage.Shared.Actions },
 	controllers = { script.Parent.Controllers },
 })

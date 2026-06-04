@@ -48,10 +48,24 @@ local function track(id: string, instance: Instance)
 end
 
 function VfxManager.attach(id: string, config: AttachConfig): Instance
+	if not config then
+		warn("[VfxManager.attach] Missing config for:", id)
+	end
+
+	if not config.template then
+		warn("[VfxManager.attach] Missing template for:", id)
+	end
+
+	if not config.parent then
+		warn("[VfxManager.attach] Missing parent for:", id)
+	end
+
 	local clone = config.template:Clone()
+
 	clone.Parent = config.parent
 
 	local emitters = getEmitters(clone)
+
 	if config.emit then
 		applyEmit(emitters, config.emit)
 	else
@@ -63,11 +77,11 @@ function VfxManager.attach(id: string, config: AttachConfig): Instance
 
 	track(id, clone)
 
-	if config.cleanup then
-		task.delay(config.cleanup, function()
-			VfxManager.remove(id, clone)
-		end)
-	end
+	local cleanupTime = config.cleanup or 5
+
+	task.delay(cleanupTime, function()
+		VfxManager.remove(id, clone)
+	end)
 
 	return clone
 end

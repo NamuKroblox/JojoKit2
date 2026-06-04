@@ -1,104 +1,109 @@
-local Players = game:GetService("Players")
+-- StandVisual.luau
+-- Client-side visual management for stand models
+-- Handles attachment, animation, and cleanup
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local AttachModel = require(script.Parent.AttachModel)
+local Constants = require(ReplicatedStorage.Shared.Features.StandEquip.Constants)
+local AnimationController = require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationController)
 
-local Knit = require(game.ReplicatedStorage.Packages.knit)
-local AnimationController
-local Constants = require(game.ReplicatedStorage.Shared.Features.StandEquip.Constants)
-
-local STAND_MODELS = game.ReplicatedStorage.StandModels
-local ATTACH_OFFSET = CFrame.new(-2, 1.5, 2)
-local HRP_TIMEOUT = 10
+local STAND_MODELS = ReplicatedStorage.StandModels
+local ATTACH_OFFSET = CFrame.new(2, 1.5, 2.5)
+local HRP_WAIT_TIMEOUT = 10
 
 local StandVisual = {}
 
-local attachTokens: { [Player]: number } = {}
+local attachmentTokens: { [number]: number } = {}
+local attachedModels: { [number]: Model } = {}
 
-local function nextToken(player: Player): number
-	attachTokens[player] = (attachTokens[player] or 0) + 1
-	return attachTokens[player]
+local function nextToken(userId: number): number
+	attachmentTokens[userId] = (attachmentTokens[userId] or 0) + 1
+	return attachmentTokens[userId]
 end
 
-local function show(player: Player, character: Model)
+local function showStand(player, character: Model)
 	local template = STAND_MODELS:FindFirstChild(Constants.DEFAULT_STAND)
 	if not template then
 		warn("[StandVisual] Missing stand model:", Constants.DEFAULT_STAND)
 		return
 	end
 
-	local token = nextToken(player)
+	local userId = player.UserId
+	local token = nextToken(userId)
 
 	task.spawn(function()
 		local hrp = character:FindFirstChild("HumanoidRootPart")
-			or character:WaitForChild("HumanoidRootPart", HRP_TIMEOUT)
+			or character:WaitForChild("HumanoidRootPart", HRP_WAIT_TIMEOUT)
+
 		if not hrp then
 			return
 		end
-		if attachTokens[player] ~= token then
-			return
-		end
-		if AttachModel.HasAttachment(player) then
+
+		-- Check if token was invalidated or stand already attached
+		if attachmentTokens[userId] ~= token or AttachModel.HasAttachment(player) then
 			return
 		end
 
-		local clone = AttachModel.Attach(character, template, ATTACH_OFFSET)
-		if not clone then
+		local standModel = AttachModel.Attach(character, template, ATTACH_OFFSET)
+		if not standModel then
 			return
 		end
 
-		AnimationController = Knit.GetController("AnimationController")
-		local controller = AnimationController.getByUserId(player.UserId)
-		if controller then
-			controller:attach("stand", clone, "Stands." .. template.Name)
-		end
+		-- Store reference for cleanup
+		attachedModels[userId] = standModel
+
+		-- Attach animator and play idle
+		local profile =
+			require(game.ReplicatedStorage.Shared.Modules.Animation.AnimationRegistry).NPCs[Constants.DEFAULT_STAND]
+		local animController = AnimationController.Attach(standModel, standModel.Humanoid.Animator, profile)
+		animController:Play("Idle", { blend = 0.2, speed = 1 })
 	end)
 end
 
-local function hide(player: Player)
-	nextToken(player)
+local function hideStand(player)
+	local userId = player.UserId
+	nextToken(userId) -- invalidate pending attach
 
-	if not AnimationController then
-		AnimationController = Knit.GetController("AnimationController")
+	if attachedModels[userId] then
+		AnimationController.Destroy(attachedModels[userId])
+		attachedModels[userId] = nil
 	end
 
-	local controller = AnimationController.getByUserId(player.UserId)
-	if controller then
-		controller:stopAnimations("standIdle")
-		controller:detach("stand")
-	end
-
-	local attached = AttachModel.HasAttachment(player)
-	if not attached then
-		return
-	end
 	AttachModel.Detach(player)
 end
 
-function StandVisual.sync(player: Player, equipped: boolean)
-	local hasVisual = AttachModel.HasAttachment(player)
-	if equipped == hasVisual then
+function StandVisual.sync(player, equipped: boolean)
+	if not player or not player.Character then
 		return
 	end
+
+	local hasAttachment = AttachModel.HasAttachment(player)
+
+	if equipped == hasAttachment then
+		return -- Already in correct state
+	end
+
 	if equipped then
-		local character = player.Character
-		if character then
-			show(player, character)
-		end
+		showStand(player, player.Character)
 	else
-		hide(player)
+		hideStand(player)
 	end
 end
 
-function StandVisual.hide(player: Player)
-	hide(player)
+function StandVisual.hide(player)
+	hideStand(player)
 end
 
-function StandVisual.cleanup(player: Player)
-	attachTokens[player] = nil
-	local controller = AnimationController.getByUserId(player.UserId)
-	if controller then
-		controller:detach("stand")
-	end
+function StandVisual.cleanup(player)
+	local userId = player.UserId
+	attachmentTokens[userId] = nil
 	AttachModel.Detach(player)
+
+	if attachedModels[userId] then
+		AnimationController.Destroy(attachedModels[userId])
+		attachedModels[userId] = nil
+	end
 end
 
 return StandVisual

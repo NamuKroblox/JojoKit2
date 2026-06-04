@@ -1,29 +1,28 @@
--- PunchShared
--- All four combat keys are now written atomically via State.setBatch so no
--- listener ever reads a half-updated snapshot (e.g. new AttackId but old Combo).
+-- PunchShared (unchanged except: snapshot no longer carries displayCombo)
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local State = require(ReplicatedStorage.Shared.Modules.State.State)
-local Meta = require(ReplicatedStorage.Shared.Modules.State.Meta)
+local State = require(ReplicatedStorage.Shared.State.State)
+local Meta = require(ReplicatedStorage.Shared.State.Meta)
+local PunchConfig = require(script.Parent.PunchConfig)
 
 local PunchShared = {}
-PunchShared.MAX_COMBO = 4
-PunchShared.RHYTHM_WINDOW = 1
 
 function PunchShared.getNow(): number
 	return workspace:GetServerTimeNow()
 end
 
 function PunchShared.getNextCombo(combo: number): (number, boolean)
-	local next = (combo % PunchShared.MAX_COMBO) + 1
-	local finisher = next == PunchShared.MAX_COMBO
+	local next = (combo % PunchConfig.MaxCombo) + 1
+	local finisher = next == PunchConfig.MaxCombo
 	return next, finisher
 end
 
 function PunchShared.shouldResetCombo(combo: number, lastPunch: number, now: number): boolean
-	return combo > 0 and (now - lastPunch) > PunchShared.RHYTHM_WINDOW
+	return combo > 0 and (now - lastPunch) > PunchConfig.RhythmWindow
 end
 
+-- Returns displayCombo separately so callers that need it (client prediction)
+-- never have to read it back from state after a potential finisher reset.
 function PunchShared.buildSnapshot(currentCombo: number, attackId: number, now: number)
 	local displayCombo, finisher = PunchShared.getNextCombo(currentCombo)
 	return {
@@ -41,8 +40,6 @@ function PunchShared.semanticMatch(a, b): boolean
 	return a.combo == b.combo and a.punching == b.punching and a.finisher == b.finisher and a.attackId == b.attackId
 end
 
--- All four keys written atomically. Listeners will not see AttackId increment
--- while Combo still holds the old value.
 function PunchShared.applyCombatState(player: Player, snapshot)
 	State.setBatch(player, {
 		[Meta.StateKeys.AttackId] = snapshot.attackId or 0,

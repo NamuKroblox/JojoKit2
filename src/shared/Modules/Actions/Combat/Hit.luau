@@ -1,3 +1,7 @@
+-- Hit.luau
+-- Server-authoritative hitbox validation with client-side prediction
+-- Handles damage dealing, hit recording, and network validation
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -9,137 +13,185 @@ local Knit = require(game.ReplicatedStorage.Packages.knit)
 
 local IS_SERVER = RunService:IsServer()
 
-local ACTION = "Hit"
-local DAMAGE = 3
-local LATENCY_TOL = 2
-local MAX_SIZE = Vector3.new(12, 12, 12)
+local ACTION_NAME = "Hit"
+local DAMAGE_AMOUNT = 3
+local LATENCY_TOLERANCE = 2
+local MAX_HITBOX_SIZE = Vector3.new(12, 12, 12)
 
-local function inBox(cf: CFrame, half: Vector3, pos: Vector3): boolean
-	local lp = cf:PointToObjectSpace(pos)
+local function pointInBox(boxCFrame: CFrame, halfSize: Vector3, point: Vector3): boolean
+	local localPoint = boxCFrame:PointToObjectSpace(point)
+	return math.abs(localPoint.X) <= halfSize.X
+		and math.abs(localPoint.Y) <= halfSize.Y
+		and math.abs(localPoint.Z) <= halfSize.Z
+end
 
-	return math.abs(lp.X) <= half.X and math.abs(lp.Y) <= half.Y and math.abs(lp.Z) <= half.Z
+local function safeGetHumanoidRoot(target: Model): BasePart?
+	if not target then
+		return nil
+	end
+
+	local candidate = target:FindFirstChild("HumanoidRootPart")
+	if candidate and candidate:IsA("BasePart") then
+		return candidate :: BasePart
+	end
+	return nil
 end
 
 if IS_SERVER then
-	Registry.register(ACTION, {
+	Registry.register(ACTION_NAME, {
 
-		validate = function(sender: Player, payload)
+		validate = function(sender: Player, payload: any)
 			if type(payload) ~= "table" then
-				return false, "bad_payload"
+				return false, "invalid_payload"
 			end
 
 			if type(payload.targetKey) ~= "string" then
-				return false, "bad_target"
-			end
-
-			local HitboxService = Knit.GetService("HitboxService")
-			local data = HitboxService:GetHitbox(sender.UserId)
-
-			if not data then
-				return false, "no_hitbox"
-			end
-
-			if data.size.X > MAX_SIZE.X or data.size.Y > MAX_SIZE.Y or data.size.Z > MAX_SIZE.Z then
-				return false, "bad_size"
+				return false, "invalid_target"
 			end
 
 			if not State.get(Meta.StateKeys.CharacterAlive, sender) then
-				return false, "dead"
+				return false, "sender_dead"
+			end
+
+			local HitboxService = Knit.GetService("HitboxService")
+			local hitboxData = HitboxService:GetHitbox(sender.UserId)
+
+			if not hitboxData then
+				return false, "no_hitbox"
+			end
+
+			-- Validate hitbox size to prevent exploits
+			if
+				hitboxData.size.X > MAX_HITBOX_SIZE.X
+				or hitboxData.size.Y > MAX_HITBOX_SIZE.Y
+				or hitboxData.size.Z > MAX_HITBOX_SIZE.Z
+			then
+				return false, "hitbox_too_large"
 			end
 
 			return true
 		end,
 
-		Execute = function(sender: Player, payload)
+		Execute = function(sender: Player, payload: any)
 			local HitboxService = Knit.GetService("HitboxService")
-			local data = HitboxService:GetHitbox(sender.UserId)
+			local hitboxData = HitboxService:GetHitbox(sender.UserId)
 
-			if not data then
+			if not hitboxData then
 				return nil
 			end
 
-			local target: Model?
-			local root: BasePart?
-
+			-- Resolve target (player or dummy)
+			local targetModel: Model?
 			if payload.isPlayer then
-				local p = Players:GetPlayerByUserId(tonumber(payload.targetKey))
-				target = p and p.Character
+				local targetPlayer = Players:GetPlayerByUserId(tonumber(payload.targetKey))
+				targetModel = targetPlayer and targetPlayer.Character
 			else
-				target = workspace:FindFirstChild(payload.targetKey)
+				local dummiesFolder = workspace:FindFirstChild("Dummies")
+				targetModel = dummiesFolder and dummiesFolder:FindFirstChild(payload.targetKey)
 			end
 
-			root = target and target:FindFirstChild("HumanoidRootPart")
-
-			if not target or not root then
+			local rootPart = safeGetHumanoidRoot(targetModel)
+			if not targetModel or not rootPart then
 				return nil
 			end
 
-			local half = data.size * 0.5 + Vector3.new(LATENCY_TOL, LATENCY_TOL, LATENCY_TOL)
+			-- Validate hit with latency tolerance
+			local tolerance = Vector3.new(LATENCY_TOLERANCE, LATENCY_TOLERANCE, LATENCY_TOLERANCE)
+			local halfSize = hitboxData.size * 0.5 + tolerance
 
-			if not inBox(data.cframe, half, root.Position) then
+			if not pointInBox(hitboxData.cframe, halfSize, rootPart.Position) then
 				return nil
 			end
 
+			-- Record hit to prevent duplicates
 			if not HitboxService:RecordHit(sender.UserId, payload.targetKey) then
 				return nil
 			end
 
-			local humanoid = target:FindFirstChildOfClass("Humanoid")
-
+			-- Apply damage
+			local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
 			if humanoid and humanoid.Health > 0 then
-				humanoid.Health -= DAMAGE
+				humanoid:TakeDamage(DAMAGE_AMOUNT)
 			end
 
 			return {
 				targetKey = payload.targetKey,
 				isPlayer = payload.isPlayer,
-				damage = DAMAGE,
+				damage = DAMAGE_AMOUNT,
 			}
 		end,
 	})
 else
-	local VfxManager = require(ReplicatedStorage.Shared.Modules.Helper.VfxManager)
-
 	local localPlayer = Players.LocalPlayer
 
-	local function playHitVfx(character: Model)
-		local root = character:FindFirstChild("HumanoidRootPart")
+	local function playHitReaction(
+		targetModel: Model,
+		isPlayer: boolean,
+		targetKey: string,
+		comboNumber: number,
+		onHit: (any) -> ()
+	)
+		if onHit then
+			onHit(targetModel)
+		end
 
-		if not root then
+		if isPlayer then
+			local targetPlayer = Players:GetPlayerByUserId(tonumber(targetKey))
+			if not targetPlayer then
+				return
+			end
+
+			local AnimationController = Knit.GetController("AnimationController")
+			local controller = AnimationController.getOrCreate(targetPlayer)
+
+			controller:play("hitReaction", "character", 1, ".Combat.MeleeHit", {
+				loop = false,
+				priority = Enum.AnimationPriority.Action,
+			})
 			return
 		end
 
-		VfxManager.attach("Punch_Vfx", {
-			parent = root,
-			template = ReplicatedStorage.Vfx.Stand.Attack.Melee.Main,
-			cleanup = 1,
-		})
-	end
-
-	local function resolveCharacter(targetKey: string, isPlayer: boolean): Model?
-		if isPlayer then
-			local p = Players:GetPlayerByUserId(tonumber(targetKey))
-			return p and p.Character
+		-- Play animation on dummy
+		local animator = targetModel:FindFirstChildWhichIsA("Animator", true)
+		if not animator then
+			return
 		end
 
-		return workspace:FindFirstChild(targetKey)
+		local animationPath = ReplicatedStorage:WaitForChild("Animations")
+			:WaitForChild("Combat")
+			:WaitForChild("MeleeHit")
+			:FindFirstChild("Hit" .. tostring(comboNumber))
+
+		if not animationPath then
+			return
+		end
+
+		local track = animator:LoadAnimation(animationPath :: Animation)
+		track:Play()
+
+		track.Stopped:Once(function()
+			track:Destroy()
+		end)
 	end
 
-	Registry.register(ACTION, {
+	Registry.register(ACTION_NAME, {
 
-		onPredict = function(payload)
-			local character = resolveCharacter(payload.targetKey, payload.isPlayer)
-
-			if character then
-				playHitVfx(character)
+		onPredict = function(payload: any)
+			if payload and payload.Character and payload.onHit then
+				playHitReaction(
+					payload.Character,
+					payload.isPlayer,
+					payload.targetKey,
+					payload.Combo or 1,
+					payload.onHit
+				)
 			end
-
 			return true
 		end,
 
-		onReconcile = function(state, reason, clientSeq) end,
+		onReconcile = function(_state: any, _reason: string?, _clientSeq: number) end,
 
-		onBroadcast = function(senderUserId, state)
+		onBroadcast = function(senderUserId: number, state: any)
 			if senderUserId == localPlayer.UserId then
 				return
 			end
@@ -148,10 +200,17 @@ else
 				return
 			end
 
-			local character = resolveCharacter(state.targetKey, state.isPlayer)
+			local targetModel: Model?
+			if state.isPlayer then
+				local targetPlayer = Players:GetPlayerByUserId(tonumber(state.targetKey))
+				targetModel = targetPlayer and targetPlayer.Character
+			else
+				local dummiesFolder = workspace:FindFirstChild("Dummies")
+				targetModel = dummiesFolder and dummiesFolder:FindFirstChild(state.targetKey)
+			end
 
-			if character then
-				playHitVfx(character)
+			if targetModel then
+				playHitReaction(targetModel, state.isPlayer, state.targetKey, 1, nil)
 			end
 		end,
 	})

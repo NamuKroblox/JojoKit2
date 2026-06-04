@@ -50,12 +50,16 @@ function AnimationPlayer:Play(slot: number, name: string, overrides: { [string]:
 	local blend = (overrides and overrides.blend) or DEFAULT_BLEND
 	local speed = (overrides and overrides.speed) or DEFAULT_SPEED
 	local loop = (overrides and overrides.loop) or track.Looped
+	local priority = overrides and overrides.priority
 
 	self:_stopSlot(slot, blend)
 	self._tokens[slot] = (self._tokens[slot] or 0) + 1
 	local token = self._tokens[slot]
 
 	track.Looped = loop
+	if priority ~= nil then
+		track.Priority = priority
+	end
 	track.TimePosition = 0
 	track:AdjustSpeed(speed)
 	track:Play(blend)
@@ -75,6 +79,8 @@ function AnimationPlayer:Play(slot: number, name: string, overrides: { [string]:
 	end
 
 	self._slots[slot] = entry
+
+	return track
 end
 
 function AnimationPlayer:Stop(slot: number, blend: number?)
@@ -119,6 +125,103 @@ function AnimationPlayer:Destroy()
 	table.clear(self._slots)
 	table.clear(self._tracks)
 	table.clear(self._tokens)
+end
+
+function AnimationPlayer:GetTrack(name: string): AnimationTrack?
+	return self._tracks[name]
+end
+
+function AnimationPlayer:GetCurrent(slot: number): string?
+	local entry = self._slots[slot]
+	return entry and entry.name or nil
+end
+
+function AnimationPlayer:IsSlotPlaying(slot: number): boolean
+	local entry = self._slots[slot]
+
+	if not entry then
+		return false
+	end
+
+	return entry.track.IsPlaying
+end
+
+function AnimationPlayer:GetProgress(slot: number): number?
+	local entry = self._slots[slot]
+
+	if not entry then
+		return nil
+	end
+
+	local track = entry.track
+
+	if track.Length <= 0 then
+		return nil
+	end
+
+	return track.TimePosition / track.Length
+end
+
+function AnimationPlayer:SetSpeed(slot: number, speed: number)
+	local entry = self._slots[slot]
+
+	if not entry then
+		return
+	end
+
+	entry.track:AdjustSpeed(speed)
+end
+
+function AnimationPlayer:GetTimePosition(slot: number): number?
+	local entry = self._slots[slot]
+
+	if not entry then
+		return nil
+	end
+
+	return entry.track.TimePosition
+end
+
+function AnimationPlayer:GetLength(name: string): number?
+	local track = self._tracks[name]
+
+	if not track then
+		return nil
+	end
+
+	return track.Length > 0 and track.Length or nil
+end
+
+function AnimationPlayer:OnMarker(name: string, marker: string, callback)
+	local track = self._tracks[name]
+
+	if not track then
+		return nil
+	end
+
+	return track:GetMarkerReachedSignal(marker):Connect(callback)
+end
+
+function AnimationPlayer:OnStopped(name: string, callback)
+	local track = self._tracks[name]
+
+	if not track then
+		return nil
+	end
+
+	return track.Stopped:Connect(callback)
+end
+
+function AnimationPlayer:WaitForEnd(name: string)
+	local track = self._tracks[name]
+
+	if not track then
+		return
+	end
+
+	if track.IsPlaying then
+		track.Stopped:Wait()
+	end
 end
 
 return AnimationPlayer

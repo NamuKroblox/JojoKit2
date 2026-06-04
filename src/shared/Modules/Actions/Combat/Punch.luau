@@ -1,3 +1,7 @@
+-- Punch.luau
+-- Server-authoritative punch action with client-side prediction and replication
+-- Handles cooldown, combo system, and finisher locks
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -10,243 +14,189 @@ local PunchShared = require(script.Parent.Util.PunchShared)
 
 local IS_SERVER = RunService:IsServer()
 
-local ACTION = "Punch"
+local ACTION_NAME = "Punch"
 local PUNCH_COOLDOWN = 0.4
-local FINISHER_LOCK = 1.5
+local FINISHER_LOCK_DURATION = 1.5
 
 local DEBUG = true
 
-local function log(tag, ...)
+local function log(tag: string, ...)
 	if DEBUG then
 		print(("[PUNCH:%s]"):format(tag), ...)
 	end
 end
 
-local function _warnlog(tag, ...)
-	warn(("[PUNCH:%s]"):format(tag), ...)
-end
-
 if IS_SERVER then
-	local t = ActionTemplate.server({ cooldown = PUNCH_COOLDOWN })
+	local actionTemplate = ActionTemplate.server({ cooldown = PUNCH_COOLDOWN })
 
-	local function validate(player: Player)
-		log("VALIDATE_CHECK", player.Name)
-
+	local function canPunch(player: Player): (boolean, string?)
 		if not State.get(Meta.StateKeys.CharacterAlive, player) then
-			log("VALIDATE_FAIL_DEAD")
 			return false, "dead"
 		end
 
 		if not State.get(Meta.StateKeys.StandEquipped, player) then
-			log("VALIDATE_FAIL_NO_STAND")
 			return false, "no_stand"
 		end
 
-		log("VALIDATE_PASS")
 		return true, nil
 	end
 
 	Players.PlayerRemoving:Connect(function(player)
-		log("CLEANUP_PLAYER", player.Name)
-		t:cleanup(player)
+		log("CLEANUP", player.Name)
+		actionTemplate:cleanup(player)
 	end)
 
-	Registry.register(ACTION, {
+	Registry.register(ACTION_NAME, {
 
-		validate = function(player, payload, clientSeq)
-			log("VALIDATE_ENTRY", player.Name, clientSeq)
-			return t:validate(player, clientSeq, function()
-				return validate(player)
+		validate = function(player: Player, payload: any, clientSeq: number)
+			local ok, err = canPunch(player)
+			if not ok then
+				log("VALIDATE_FAIL", err)
+				return false, err
+			end
+
+			return actionTemplate:validate(player, clientSeq, function()
+				return true, nil
 			end)
 		end,
 
-		Execute = function(player, payload, clientSeq)
-			local now = t:advance(player, clientSeq)
+		Execute = function(player: Player, payload: any, clientSeq: number)
+			log("EXECUTE", player.Name)
 
-			log("EXECUTE", {
-				player = player.Name,
-				clientSeq = clientSeq,
-				now = now,
-			})
+			local now = actionTemplate:advance(player, clientSeq)
 
 			local combo = State.get(Meta.StateKeys.Combo, player) or 0
 			local lastPunch = State.get(Meta.StateKeys.LastPunch, player) or 0
 
 			if PunchShared.shouldResetCombo(combo, lastPunch, now) then
-				log("COMBO_RESET_SERVER")
 				combo = 0
 			end
 
 			local snapshot = PunchShared.buildSnapshot(combo, clientSeq, now)
 
-			log("SNAPSHOT_SERVER", snapshot)
-
 			if snapshot.finisher then
-				log("FINISHER_LOCK")
-				t:lock(player, "finisher", FINISHER_LOCK)
+				actionTemplate:lock(player, "finisher", FINISHER_LOCK_DURATION)
 			end
 
 			PunchShared.applyCombatState(player, snapshot)
-
-			log("STATE_APPLIED_SERVER")
+			log("STATE_UPDATED", { combo = snapshot.displayCombo, attackId = snapshot.attackId })
 
 			return snapshot
 		end,
 	})
 else
 	local Knit = require(ReplicatedStorage.Packages.knit)
-
 	local PunchPrediction = require(script.Parent.Client.PunchPrediction)
 	local PunchEffects = require(script.Parent.Client.PunchEffects)
-
 	local AnimationQueue = require(ReplicatedStorage.Shared.Modules.Animation.AnimationQueue)
 
-	local t = ActionTemplate.client({ cooldown = PUNCH_COOLDOWN })
+	local actionTemplate = ActionTemplate.client({ cooldown = PUNCH_COOLDOWN })
 	local localPlayer = Players.LocalPlayer
 	local prediction = PunchPrediction.new()
-	local HitboxController = nil
-	local animQueue = nil
+	local hitboxController = nil
+	local animationQueue = nil
 
-	local function canPunch()
+	local function canPunch(): boolean
 		return State.get(Meta.StateKeys.CharacterAlive, localPlayer)
 			and State.get(Meta.StateKeys.StandEquipped, localPlayer)
 	end
 
-	local function hardReset()
-		log("HARD_RESET")
-
-		t:cleanup()
+	local function resetPrediction()
+		log("RESET_PREDICTION")
+		actionTemplate:cleanup()
 		prediction:reset()
 		PunchShared.resetCombatState(localPlayer)
-
-		--local animator = AnimatorRegistry.get(localPlayer)
-		--if animator then
-		--	animator:cancelAttack()
-		--end
 	end
 
-	local function predict(now, attackId)
-		log("PREDICT_START", {
-			now = now,
-			attackId = attackId,
-			canAct = t:canAct(now),
-		})
+	local function predictPunch(now: number, attackId: number)
+		log("PREDICT", attackId)
 
-		local combat = prediction:get()
-		local combo = combat.combo
+		local combatState = prediction:get()
+		local combo = combatState.combo
 
-		if PunchShared.shouldResetCombo(combo, combat.lastPunch, now) then
-			log("COMBO_RESET")
+		if PunchShared.shouldResetCombo(combo, combatState.lastPunch, now) then
 			combo = 0
 		end
 
 		local snapshot = PunchShared.buildSnapshot(combo, attackId, now)
 
-		log("SNAPSHOT", snapshot)
-
 		if snapshot.finisher then
-			t:lock("finisher", FINISHER_LOCK)
+			actionTemplate:lock("finisher", FINISHER_LOCK_DURATION)
 		end
 
 		prediction:push(snapshot)
 		PunchShared.applyCombatState(localPlayer, snapshot)
+		log("PREDICTED", { combo = snapshot.displayCombo, attackId = snapshot.attackId })
 
-		log("STATE_APPLIED")
-
-		if animQueue then
-			animQueue:push({
+		-- Queue animation
+		if animationQueue then
+			animationQueue:push({
 				combo = snapshot.displayCombo,
 				attackId = snapshot.attackId,
 				serverTime = snapshot.serverTime,
 				duration = 0.25,
 				isPredicted = true,
 			})
-
-			log("ANIM_QUEUED", snapshot.displayCombo, snapshot.attackId)
 		end
 
-		PunchEffects.play(localPlayer, snapshot, HitboxController)
+		PunchEffects.play(localPlayer, snapshot, hitboxController)
 	end
 
-	Registry.register(ACTION, {
+	Registry.register(ACTION_NAME, {
 
-		onPredict = function(_, clientSeq)
-			local now = PunchShared.getNow()
-
-			log("PREDICT_EVENT", {
-				now = now,
-				canAct = t:canAct(now),
-			})
-
-			if not t:canAct(now) then
+		onPredict = function(payload: any)
+			if not actionTemplate:canAct(os.clock()) then
 				return false
 			end
 			if not canPunch() then
 				return false
 			end
 
-			local attackId = t:advance(now)
-
-			log("ATTACK_ID", attackId)
-
-			predict(now, attackId)
-
+			local now = os.clock()
+			local attackId = actionTemplate:advance(now)
+			predictPunch(now, attackId)
 			return true
 		end,
 
-		onReconcile = function(state, reason, clientSeq)
-			log("RECONCILE", {
-				reason = reason,
-				clientSeq = clientSeq,
-			})
+		onReconcile = function(serverState: any, reason: string?, clientSeq: number)
+			log("RECONCILE", reason or "success")
 
-			t:reconcile(clientSeq, state, function(serverState)
+			actionTemplate:reconcile(clientSeq, serverState, function(state)
 				local predicted = prediction:pop(clientSeq)
 
 				if not predicted then
-					log("NO_PREDICTED_STATE")
-					PunchShared.applyCombatState(localPlayer, serverState)
+					log("NO_PREDICTION")
+					PunchShared.applyCombatState(localPlayer, state)
 					return
 				end
 
-				local match = PunchShared.semanticMatch(predicted, serverState)
-
-				log("SEMANTIC_MATCH", match)
-
-				if not match then
-					log("CORRECTION_APPLY")
-					PunchShared.applyCombatState(localPlayer, serverState)
+				if not PunchShared.semanticMatch(predicted, state) then
+					log("CORRECTION")
+					PunchShared.applyCombatState(localPlayer, state)
 				else
-					State.set(Meta.StateKeys.LastPunch, localPlayer, serverState.lastPunch)
+					State.set(Meta.StateKeys.LastPunch, localPlayer, state.lastPunch)
 				end
 			end, function()
-				log("HARD_RESET_RECONCILE")
-				hardReset()
+				resetPrediction()
 			end)
 		end,
 
-		onBroadcast = function(senderUserId, state)
+		onBroadcast = function(senderUserId: number, state: any)
 			local sender = Players:GetPlayerByUserId(senderUserId)
 			if not sender or sender == localPlayer then
 				return
 			end
 
 			log("BROADCAST", sender.Name)
-
 			PunchShared.applyCombatState(sender, state)
 			PunchEffects.play(sender, state, nil)
 		end,
 	})
 
+	-- Deferred controller initialization
 	task.defer(function()
-		HitboxController = Knit.GetController("HitboxController")
-		log("HITBOX_CONTROLLER_READY")
-
-		--local animator = AnimatorRegistry.get(localPlayer)
-		--if animator then
-		--	animQueue = AnimationQueue.new(animator)
-		--	log("ANIMATION_QUEUE_READY")
-		--end
+		hitboxController = Knit.GetController("HitboxController")
+		log("READY")
 	end)
 end
 
