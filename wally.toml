@@ -6,6 +6,10 @@ realm = "shared"
 
 [dependencies]
 knit = "sleitnick/knit@1.7.0"
-chrono = "parihsz/chrono@2.0.0-experimental"
+chrono = "parihsz/chrono@2.1.0"
+DataService = "leifstout/dataservice@1.0.0"
+topbarplus = "1foreverhd/topbarplus@3.4.0"
+
+
 
 [server-dependencies]

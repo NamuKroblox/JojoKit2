@@ -1,14 +1,11 @@
--- ReplicationService (Server)
--- Authoritative action dispatcher with rate limiting, validation, and replication
--- Handles dispatch queuing, reconciliation, and broadcasting to all clients
-
 local RunService = game:GetService("RunService")
 local Knit = require(game:GetService("ReplicatedStorage").Packages.knit)
-local Registry = require(game:GetService("ReplicatedStorage").Shared.Modules.Replication.ReplicationRegistry)
+local ReplicationRegistry = require(game:GetService("ReplicatedStorage").Shared.Registration.Registries.ReplicationRegistry)
+local ReactionRegistry = require(game.ReplicatedStorage.Shared.Registration.Registries.ReactionRegistry)
 
-local DISPATCH_RATE_LIMIT = 60 -- actions per heartbeat per player
-local MAX_SEQUENCE = 1e6
-local MAX_ACTION_NAME_LEN = 64
+local GLOBAL_RATE = 60
+local MAX_SEQ = 1e6
+local MAX_ACTION_LEN = 64
 
 local ReplicationService = {
 	Name = "ReplicationService",
@@ -18,67 +15,105 @@ local ReplicationService = {
 	},
 }
 
-local dispatchCounts = {} -- [userId] = count; cleared each heartbeat
+local dispatchCount = {} -- keyed by userId
 
 function ReplicationService:KnitInit()
 	RunService.Heartbeat:Connect(function()
-		table.clear(dispatchCounts)
+		table.clear(dispatchCount)
 	end)
 end
 
--- Validate incoming action dispatch
-local function validateDispatch(actionType: string, clientSeq: number): (boolean, string?)
-	if type(actionType) ~= "string" or #actionType == 0 or #actionType > MAX_ACTION_NAME_LEN then
-		return false, "invalid_action_type"
+function ReplicationService.Client:DispatchAction(
+	sender: Player,
+	actionType: string,
+	payload: any,
+	clientSeq: number
+): boolean?
+	if type(actionType) ~= "string" or #actionType == 0 or #actionType > MAX_ACTION_LEN then
+		return false
+	end
+	if type(clientSeq) ~= "number" or clientSeq <= 0 or clientSeq > MAX_SEQ then
+		return false
 	end
 
-	if type(clientSeq) ~= "number" or clientSeq <= 0 or clientSeq > MAX_SEQUENCE then
-		return false, "invalid_sequence"
+	local userId = sender and sender.UserId
+	if not userId then
+		return false
 	end
 
-	return true, nil
+	dispatchCount[userId] = (dispatchCount[userId] or 0) + 1
+	if dispatchCount[userId] > GLOBAL_RATE then
+		warn("[Replication] Rate limit:", sender.Name)
+		return false
+	end
+
+	local handlers = ReplicationRegistry:get(actionType)
+	if not handlers then
+		warn("[Replication] No handler for:", actionType)
+		return false
+	end
+
+	local ok, reason = handlers.validate(sender, payload, clientSeq)
+	if not ok then
+		-- Fire: (handlerType, clientSeq, success, broadcastState, reason)
+		self.Reconcile:Fire(sender,actionType, clientSeq, false, nil, reason)
+		return false
+	end
+
+	local broadcastState = handlers.Execute(sender, payload, clientSeq)
+
+	-- Fire: (handlerType, clientSeq, success, broadcastState, reason)
+	self.Reconcile:Fire(sender,actionType, clientSeq, true, broadcastState, nil)
+	self.Broadcast:FireAll(sender.UserId, actionType, broadcastState, payload)
+
+	return true
 end
 
-function ReplicationService.Client:DispatchAction(sender: Player, actionType: string, payload: any, clientSeq: number)
-	-- Validate basic dispatch parameters
-	local validParams, paramErr = validateDispatch(actionType, clientSeq)
-	if not validParams then
-		warn("[Replication] Invalid dispatch:", paramErr, "from", sender.Name)
-		return
+function ReplicationService.Client:DispatchReaction(
+	sender    : Player,
+	reactionId: string,
+	payload   : any,
+	clientSeq : number
+): boolean?
+	-- Same guards as DispatchAction
+	if type(reactionId) ~= "string" or #reactionId == 0 or #reactionId > MAX_ACTION_LEN then
+		return false
+	end
+	if type(clientSeq) ~= "number" or clientSeq <= 0 or clientSeq > MAX_SEQ then
+		return false
 	end
 
-	-- Rate limit per player
-	local userId = sender.UserId
-	dispatchCounts[userId] = (dispatchCounts[userId] or 0) + 1
-	if dispatchCounts[userId] > DISPATCH_RATE_LIMIT then
-		warn("[Replication] Rate limit exceeded:", sender.Name)
-		self.Reconcile:Fire(sender, actionType, clientSeq, false, nil, "rate_limit")
-		return
+	local userId = sender and sender.UserId
+	if not userId then
+		return false
 	end
 
-	-- Get action handler
-	local handler = Registry.get(actionType)
-	if not handler then
-		warn("[Replication] Unknown action:", actionType)
-		self.Reconcile:Fire(sender, actionType, clientSeq, false, nil, "unknown_action")
-		return
+	dispatchCount[userId] = (dispatchCount[userId] or 0) + 1
+	if dispatchCount[userId] > GLOBAL_RATE then
+		warn("[Replication] Rate limit:", sender.Name)
+		return false
 	end
 
-	-- Validate action on server
-	local valid, validErr = handler.validate(sender, payload, clientSeq)
-	if not valid then
-		self.Reconcile:Fire(sender, actionType, clientSeq, false, nil, validErr)
-		return
+	local handlers = ReactionRegistry:get(reactionId)
+	if not handlers then
+		warn("[Replication] No reaction handler:", reactionId)
+		return false
 	end
 
-	-- Execute action and get result state
-	local resultState = handler.Execute(sender, payload, clientSeq)
+	local ok, reason = handlers.validate(sender, payload, clientSeq)
+	if not ok then
+		-- Fire: (handlerType, clientSeq, success, broadcastState, reason)
+		self.Reconcile:Fire(sender,reactionId, clientSeq, false, nil, reason)
+		return false
+	end
 
-	-- Send reconciliation to sender
-	self.Reconcile:Fire(sender, actionType, clientSeq, true, resultState, nil)
+	local broadcastState = handlers.Execute(sender, payload, clientSeq)
 
-	-- Broadcast result to all other players
-	self.Broadcast:FireAll(userId, actionType, resultState)
+	-- Fire: (handlerType, clientSeq, success, broadcastState, reason)
+	self.Reconcile:Fire(sender,reactionId, clientSeq, true, broadcastState, nil)
+	self.Broadcast:FireAll(sender.UserId, reactionId, broadcastState, payload)
+
+	return true
 end
 
 return ReplicationService

@@ -9,6 +9,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 Bootstrapper.start({
 	knit = Knit,
 	chrono = Chrono,
-	actions = { ReplicatedStorage.Shared.Actions },
+	abilities = ReplicatedStorage.Shared.Abilities,
+	Registries = ReplicatedStorage.Shared.Registration.Registries,
+	isClient = true,
 	controllers = { script.Parent.Controllers },
 })
