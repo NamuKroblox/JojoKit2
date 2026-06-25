@@ -15,7 +15,7 @@ dependencies = []
 [[package]]
 name = "general/jojokit"
 version = "0.1.0"
-dependencies = [["DataService", "leifstout/dataservice@1.0.0"], ["chrono", "parihsz/chrono@2.1.0"], ["knit", "sleitnick/knit@1.7.0"], ["topbarplus", "1foreverhd/topbarplus@3.4.0"]]
+dependencies = [["DataService", "leifstout/dataservice@1.0.0"], ["chrono", "parihsz/chrono@2.1.4"], ["janitor", "howmanysmall/janitor@1.18.3"], ["knit", "sleitnick/knit@1.7.0"], ["topbarplus", "1foreverhd/topbarplus@3.4.0"]]
 
 [[package]]
 name = "howmanysmall/janitor"
@@ -44,7 +44,7 @@ dependencies = []
 
 [[package]]
 name = "parihsz/chrono"
-version = "2.1.0"
+version = "2.1.4"
 dependencies = []
 
 [[package]]
